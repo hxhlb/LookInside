@@ -20,6 +20,16 @@ NS_ASSUME_NONNULL_BEGIN
 /// 返回 soloScreenshot 或 groupScreenshot
 - (NSImage *)appropriateScreenshot;
 
+- (unsigned long)bestObjectOidPreferView:(BOOL)preferView;
+
+- (NSArray<NSNumber *> *)availableObjectOidsPreferView:(BOOL)preferView;
+
+/// 当前 item 是否在预览里用 groupScreenshot 代替了 soloScreenshot。
+- (BOOL)usesGroupScreenshotFallbackInPreview;
+
+/// 任意上级 item 是否在预览里用 groupScreenshot 代替了 soloScreenshot。
+- (BOOL)hasAncestorUsingGroupScreenshotFallbackInPreview;
+
 /// Compatibility shim for older client code paths that still distinguish windows.
 @property(nonatomic, strong, readonly) LookinObject *windowObject;
 

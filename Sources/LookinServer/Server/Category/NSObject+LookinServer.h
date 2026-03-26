@@ -9,6 +9,9 @@
 
 #import "LookinDefines.h"
 #import <Foundation/Foundation.h>
+#if TARGET_OS_MAC
+#import <AppKit/AppKit.h>
+#endif
 
 @class LookinIvarTrace;
 
@@ -38,5 +41,43 @@
 - (NSArray<NSString *> *)lks_classChainList;
 
 @end
+
+#if TARGET_OS_MAC
+
+@interface NSView (LookinServer)
+
+@property(nonatomic, assign) float lks_horizontalContentHuggingPriority;
+@property(nonatomic, assign) float lks_verticalContentHuggingPriority;
+@property(nonatomic, assign) float lks_horizontalContentCompressionResistancePriority;
+@property(nonatomic, assign) float lks_verticalContentCompressionResistancePriority;
+@property(nonatomic, strong) NSMutableArray<NSLayoutConstraint *> *lks_involvedRawConstraints;
+
++ (void)lks_rebuildGlobalInvolvedRawConstraints;
+- (NSArray *)lks_constraints;
+
+@end
+
+@interface NSImageView (LookinServer)
+
+- (NSString *)lks_imageSourceName;
+- (NSNumber *)lks_imageViewOidIfHasImage;
+
+@end
+
+@interface NSTextField (LookinServer)
+
+@property(nonatomic, assign) CGFloat lks_fontSize;
+- (NSString *)lks_fontName;
+
+@end
+
+@interface NSTextView (LookinServer)
+
+@property(nonatomic, assign) CGFloat lks_fontSize;
+- (NSString *)lks_fontName;
+
+@end
+
+#endif
 
 #endif /* SHOULD_COMPILE_LOOKIN_SERVER */

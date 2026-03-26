@@ -10,9 +10,20 @@
 #import "LookinDefines.h"
 
 @class LookinAttributesGroup;
+#if TARGET_OS_MAC
+@class NSView, NSWindow;
+#endif
 
 @interface LKS_AttrGroupsMaker : NSObject
-    
+
+#if TARGET_OS_MAC
+
++ (NSArray<LookinAttributesGroup *> *)attrGroupsForView:(NSView *)view;
+
++ (NSArray<LookinAttributesGroup *> *)attrGroupsForWindow:(NSWindow *)window;
+
+#endif
+
 + (NSArray<LookinAttributesGroup *> *)attrGroupsForLayer:(CALayer *)layer;
 
 @end

@@ -11,6 +11,7 @@
 #import "LookinDisplayItem.h"
 #import "LKPreferenceManager.h"
 #import "LookinHierarchyInfo.h"
+#import "LookinDisplayItem+LookinClient.h"
 
 @interface LKReadHierarchyDataSource ()
 
@@ -27,16 +28,23 @@
         [self reloadWithHierarchyInfo:file.hierarchyInfo keepState:NO];
 
         if (file.soloScreenshots.count || file.groupScreenshots.count) {
+            BOOL prefersViewOID = [LKHelper appInfoLooksLikeMacTarget:file.hierarchyInfo.appInfo];
             [self.flatItems enumerateObjectsUsingBlock:^(LookinDisplayItem * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
-                unsigned long oid = obj.layerObject.oid;
+                __block NSData *soloData = nil;
+                __block NSData *groupData = nil;
+                [[obj availableObjectOidsPreferView:prefersViewOID] enumerateObjectsUsingBlock:^(NSNumber *oidNumber, NSUInteger idx, BOOL *stop) {
+                    soloData = file.soloScreenshots[oidNumber];
+                    groupData = file.groupScreenshots[oidNumber];
+                    if (soloData || groupData) {
+                        *stop = YES;
+                    }
+                }];
                 
-                NSData *soloData = file.soloScreenshots[@(oid)];
                 if (soloData) {
                     NSImage *soloImage = [[NSImage alloc] initWithData:soloData];
                     obj.soloScreenshot = soloImage;
                 }
                 
-                NSData *groupData = file.groupScreenshots[@(oid)];
                 if (groupData) {
                     NSImage *groupImage = [[NSImage alloc] initWithData:groupData];
                     obj.groupScreenshot = groupImage;                    

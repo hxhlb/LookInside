@@ -46,9 +46,11 @@
 }
 
 - (void)removeTaskWithItem:(LookinDisplayItem *)item {
+    BOOL prefersViewOID = [LKHelper appInfoLooksLikeMacTarget:[LKStaticHierarchyDataSource sharedInstance].rawHierarchyInfo.appInfo];
+    NSSet<NSNumber *> *itemOids = [NSSet setWithArray:[item availableObjectOidsPreferView:prefersViewOID]];
     for (LookinStaticAsyncUpdateTasksPackage *pack in self.packages) {
         pack.tasks = [pack.tasks lookin_filter:^BOOL(LookinStaticAsyncUpdateTask *task) {
-            if (task.oid == item.layerObject.oid) {
+            if ([itemOids containsObject:@(task.oid)]) {
                 return NO;
             } else {
                 return YES;
@@ -154,19 +156,19 @@
         }
         if (item.doNotFetchScreenshotReason == LookinFetchScreenshotPermitted) {
             LookinStaticAsyncUpdateTask *task = [self _taskFromDisplayItem:item type:LookinStaticAsyncUpdateTaskTypeGroupScreenshot];
-            if (![tasks containsObject:task]) {
+            if (task && ![tasks containsObject:task]) {
                 [tasks addObject:task];
             }
             
             if (item.isExpandable) {
                 LookinStaticAsyncUpdateTask *task2 = [self _taskFromDisplayItem:item type:LookinStaticAsyncUpdateTaskTypeSoloScreenshot];
-                if (![tasks containsObject:task2]) {
+                if (task2 && ![tasks containsObject:task2]) {
                     [tasks addObject:task2];
                 }
             }
         } else {
             LookinStaticAsyncUpdateTask *task = [self _taskFromDisplayItem:item type:LookinStaticAsyncUpdateTaskTypeNoScreenshot];
-            if (![tasks containsObject:task]) {
+            if (task && ![tasks containsObject:task]) {
                 [tasks addObject:task];
             }
         }
@@ -206,8 +208,23 @@
 }
 
 - (LookinStaticAsyncUpdateTask *)_taskFromDisplayItem:(LookinDisplayItem *)item type:(LookinStaticAsyncUpdateTaskType)type {
+    BOOL prefersViewOID = [LKHelper appInfoLooksLikeMacTarget:self.dataSource.rawHierarchyInfo.appInfo];
+    unsigned long oid = 0;
+    if (prefersViewOID && item.viewObject.oid) {
+        oid = item.viewObject.oid;
+    } else if (item.layerObject.oid) {
+        oid = item.layerObject.oid;
+    } else if (item.viewObject.oid) {
+        oid = item.viewObject.oid;
+    } else if (item.windowObject.oid) {
+        oid = item.windowObject.oid;
+    }
+    if (oid == 0) {
+        return nil;
+    }
+
     LookinStaticAsyncUpdateTask *task = [LookinStaticAsyncUpdateTask new];
-    task.oid = item.layerObject.oid;
+    task.oid = oid;
     task.frameSize = item.frame.size;
     task.taskType = type;
     task.clientReadableVersion = [LKHelper lookinReadableVersion];
@@ -231,10 +248,14 @@
         }
         if (item == displayItem && item.subitems.count) {
             LookinStaticAsyncUpdateTask *task = [self _taskFromDisplayItem:item type:LookinStaticAsyncUpdateTaskTypeSoloScreenshot];
-            [tasks addObject:task];
+            if (task) {
+                [tasks addObject:task];
+            }
         }
         LookinStaticAsyncUpdateTask *task2 = [self _taskFromDisplayItem:item type:LookinStaticAsyncUpdateTaskTypeGroupScreenshot];
-        [tasks addObject:task2];
+        if (task2) {
+            [tasks addObject:task2];
+        }
     }];
     
     [self.modifyingUpdateProgressSignal sendNext:[RACTwoTuple tupleWithObjectsFromArray:@[@0, @0]]];
@@ -459,12 +480,21 @@
                 return;
             }
             if (item.doNotFetchScreenshotReason == LookinFetchScreenshotPermitted) {
-                [tasks addObject:[self _taskFromDisplayItem:item type:LookinStaticAsyncUpdateTaskTypeGroupScreenshot]];
+                LookinStaticAsyncUpdateTask *groupTask = [self _taskFromDisplayItem:item type:LookinStaticAsyncUpdateTaskTypeGroupScreenshot];
+                if (groupTask) {
+                    [tasks addObject:groupTask];
+                }
                 if (item.isExpandable) {
-                    [tasks addObject:[self _taskFromDisplayItem:item type:LookinStaticAsyncUpdateTaskTypeSoloScreenshot]];
+                    LookinStaticAsyncUpdateTask *soloTask = [self _taskFromDisplayItem:item type:LookinStaticAsyncUpdateTaskTypeSoloScreenshot];
+                    if (soloTask) {
+                        [tasks addObject:soloTask];
+                    }
                 }
             } else {
-                [tasks addObject:[self _taskFromDisplayItem:item type:LookinStaticAsyncUpdateTaskTypeNoScreenshot]];
+                LookinStaticAsyncUpdateTask *attrTask = [self _taskFromDisplayItem:item type:LookinStaticAsyncUpdateTaskTypeNoScreenshot];
+                if (attrTask) {
+                    [tasks addObject:attrTask];
+                }
             }
         }];
         [self sendTasks:tasks completion:nil];

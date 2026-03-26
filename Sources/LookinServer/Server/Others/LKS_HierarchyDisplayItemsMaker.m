@@ -12,11 +12,44 @@
 #import "LookinObject.h"
 #import "LKS_AttrGroupsMaker.h"
 #import "CALayer+LookinServer.h"
+#import "NSObject+LookinServer.h"
 #import "LKS_MultiplatformAdapter.h"
 
 #if TARGET_OS_MAC
 
 @implementation LKS_HierarchyDisplayItemsMaker
+
+static NSArray<NSView *> *LKHideVisibleSubviewsForScreenshot(NSArray<NSView *> *subviews) {
+    NSMutableArray<NSView *> *hiddenSubviews = [NSMutableArray array];
+    for (NSView *subview in subviews.copy) {
+        if (!subview.isHidden) {
+            subview.hidden = YES;
+            [hiddenSubviews addObject:subview];
+        }
+    }
+    return hiddenSubviews.copy;
+}
+
+static void LKRestoreHiddenSubviewsForScreenshot(NSArray<NSView *> *subviews) {
+    for (NSView *subview in subviews) {
+        subview.hidden = NO;
+    }
+}
+
+static NSImage *LKSnapshotImageForView(NSView *view) {
+    if (!view || view.bounds.size.width <= 0 || view.bounds.size.height <= 0) {
+        return nil;
+    }
+    NSBitmapImageRep *bitmapRep = [view bitmapImageRepForCachingDisplayInRect:view.bounds];
+    if (!bitmapRep) {
+        return nil;
+    }
+    [bitmapRep setSize:view.bounds.size];
+    [view cacheDisplayInRect:view.bounds toBitmapImageRep:bitmapRep];
+    NSImage *image = [[NSImage alloc] initWithSize:view.bounds.size];
+    [image addRepresentation:bitmapRep];
+    return image;
+}
 
 + (CGRect)_normalizedScreenRect:(CGRect)rect forWindow:(NSWindow *)window {
     NSScreen *screen = window.screen ?: NSScreen.mainScreen;
@@ -88,20 +121,19 @@
     if (view.layer) {
         item.layerObject = [LookinObject instanceWithObject:view.layer];
         item.backgroundColor = view.layer.lks_backgroundColor;
-        if (hasAttrList) {
-            item.attributesGroupList = [LKS_AttrGroupsMaker attrGroupsForLayer:view.layer];
-        }
-        if (hasScreenshots) {
-            item.groupScreenshot = [view.layer lks_groupScreenshotWithLowQuality:lowQuality];
-            item.soloScreenshot = [view.layer lks_soloScreenshotWithLowQuality:lowQuality];
-        }
-    } else if (hasScreenshots) {
-        NSBitmapImageRep *bitmapRep = [view bitmapImageRepForCachingDisplayInRect:view.bounds];
-        if (bitmapRep) {
-            [view cacheDisplayInRect:view.bounds toBitmapImageRep:bitmapRep];
-            NSImage *image = [[NSImage alloc] initWithSize:view.bounds.size];
-            [image addRepresentation:bitmapRep];
-            item.groupScreenshot = image;
+    }
+    if (hasAttrList) {
+        item.attributesGroupList = [LKS_AttrGroupsMaker attrGroupsForView:view];
+    }
+    if (hasScreenshots) {
+        item.groupScreenshot = LKSnapshotImageForView(view);
+        if (view.subviews.count) {
+            NSArray<NSView *> *hiddenSubviews = LKHideVisibleSubviewsForScreenshot(view.subviews ?: @[]);
+            @try {
+                item.soloScreenshot = LKSnapshotImageForView(view);
+            } @finally {
+                LKRestoreHiddenSubviewsForScreenshot(hiddenSubviews);
+            }
         }
     }
 
@@ -135,6 +167,9 @@
 }
 
 + (NSArray<LookinDisplayItem *> *)itemsWithScreenshots:(BOOL)hasScreenshots attrList:(BOOL)hasAttrList lowImageQuality:(BOOL)lowQuality readCustomInfo:(BOOL)readCustomInfo saveCustomSetter:(BOOL)saveCustomSetter {
+    if (hasAttrList) {
+        [NSView lks_rebuildGlobalInvolvedRawConstraints];
+    }
     NSMutableArray<LookinDisplayItem *> *items = [NSMutableArray array];
     for (NSWindow *window in [LKS_MultiplatformAdapter allWindows]) {
         LookinDisplayItem *windowItem = [LookinDisplayItem new];
@@ -149,6 +184,9 @@
         windowItem.alpha = window.alphaValue;
         windowItem.shouldCaptureImage = YES;
         windowItem.screenshotEncodeType = LookinDisplayItemImageEncodeTypeNSData;
+        if (hasAttrList) {
+            windowItem.attributesGroupList = [LKS_AttrGroupsMaker attrGroupsForWindow:window];
+        }
         if (window.contentView) {
             LookinDisplayItem *contentItem = [self _itemForView:window.contentView window:window screenshots:hasScreenshots attrList:hasAttrList lowImageQuality:lowQuality];
             windowItem.subitems = contentItem ? @[contentItem] : @[];

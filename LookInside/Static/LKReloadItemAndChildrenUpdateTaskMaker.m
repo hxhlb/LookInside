@@ -10,6 +10,7 @@
 #import "LKStaticAsyncUpdateManager.h"
 #import "LKAppsManager.h"
 #import "LKVersionComparer.h"
+#import "LookinDisplayItem+LookinClient.h"
 
 @implementation LKReloadItemAndChildrenUpdateTaskMaker
 
@@ -24,8 +25,13 @@
         AlertErrorText(NSLocalizedString(@"Operation failed.", nil), NSLocalizedString(@"Please upgrade the LookinServer SDK version in your iOS project to 1.2.7 or higher.", nil), CurrentKeyWindow);
         return nil;
     }
+    BOOL prefersViewOID = [LKHelper appInfoLooksLikeMacTarget:[LKAppsManager sharedInstance].inspectingApp.appInfo];
+    unsigned long oid = [item bestObjectOidPreferView:prefersViewOID];
+    if (!oid) {
+        return nil;
+    }
     LookinStaticAsyncUpdateTask *task = [LookinStaticAsyncUpdateTask new];
-    task.oid = item.layerObject.oid;
+    task.oid = oid;
     task.taskType = LookinStaticAsyncUpdateTaskTypeNoScreenshot;
     task.attrRequest = LookinDetailUpdateTaskAttrRequest_NotNeed;
     task.needBasisVisualInfo = YES;

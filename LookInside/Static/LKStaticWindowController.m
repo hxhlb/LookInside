@@ -97,8 +97,56 @@
             BOOL canMeasure = !!x;
             measureButton.enabled = canMeasure;
         }];
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self _autoConnectAppIfRequested];
+        });
     }
     return self;
+}
+
+- (void)_autoConnectAppIfRequested {
+    NSDictionary<NSString *, NSString *> *environment = NSProcessInfo.processInfo.environment;
+    NSString *targetBundleID = environment[@"LOOKINSIDE_AUTO_CONNECT_BUNDLE_ID"];
+    BOOL shouldConnectFirst = [environment[@"LOOKINSIDE_AUTO_CONNECT_FIRST"] boolValue];
+    if (targetBundleID.length == 0 && !shouldConnectFirst) {
+        return;
+    }
+
+    [self.viewController.progressView animateToProgress:InitialIndicatorProgressWhenFetchHierarchy];
+
+    @weakify(self);
+    [[[[LKAppsManager sharedInstance] fetchAppInfosWithImage:YES localInfos:nil] deliverOnMainThread] subscribeNext:^(NSArray<LKInspectableApp *> *apps) {
+        @strongify(self);
+        LKInspectableApp *targetApp = nil;
+        if (targetBundleID.length > 0) {
+            targetApp = [apps lookin_firstFiltered:^BOOL(LKInspectableApp *app) {
+                return [app.appInfo.appBundleIdentifier isEqualToString:targetBundleID];
+            }];
+        } else if (shouldConnectFirst) {
+            targetApp = [apps lookin_firstFiltered:^BOOL(LKInspectableApp *app) {
+                return app.serverVersionError == nil && app.appInfo != nil;
+            }];
+        }
+
+        if (!targetApp) {
+            [self.viewController.progressView resetToZero];
+            return;
+        }
+
+        BOOL isTheSameApp = [[LKAppsManager sharedInstance].inspectingApp.appInfo isEqualToAppInfo:targetApp.appInfo];
+        [[targetApp fetchHierarchyData] subscribeNext:^(LookinHierarchyInfo *info) {
+            [self.viewController.progressView finishWithCompletion:nil];
+            [LKAppsManager sharedInstance].inspectingApp = targetApp;
+            [[LKStaticHierarchyDataSource sharedInstance] reloadWithHierarchyInfo:info keepState:isTheSameApp];
+        } error:^(NSError * _Nullable error) {
+            [self.viewController.progressView resetToZero];
+            AlertError(error, self.window);
+        }];
+    } error:^(NSError * _Nullable error) {
+        @strongify(self);
+        [self.viewController.progressView resetToZero];
+    }];
 }
 
 - (void)popupAllInspectableAppsWithSource:(MenuPopoverAppsListControllerEventSource)source {

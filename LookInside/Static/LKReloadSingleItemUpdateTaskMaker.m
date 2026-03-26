@@ -10,6 +10,7 @@
 #import "LKStaticAsyncUpdateManager.h"
 #import "LKAppsManager.h"
 #import "LKVersionComparer.h"
+#import "LookinDisplayItem+LookinClient.h"
 
 @implementation LKReloadSingleItemUpdateTaskMaker
 
@@ -28,26 +29,37 @@
 
     if (item.doNotFetchScreenshotReason == LookinFetchScreenshotPermitted) {
         LookinStaticAsyncUpdateTask *task = [self taskFromItem:item];
-        task.taskType = LookinStaticAsyncUpdateTaskTypeGroupScreenshot;
-        [tasks addObject:task];
+        if (task) {
+            task.taskType = LookinStaticAsyncUpdateTaskTypeGroupScreenshot;
+            [tasks addObject:task];
+        }
         
         if (item.isExpandable) {
             LookinStaticAsyncUpdateTask *task2 = [self taskFromItem:item];
-            task2.taskType = LookinStaticAsyncUpdateTaskTypeSoloScreenshot;
-            [tasks addObject:task2];
+            if (task2) {
+                task2.taskType = LookinStaticAsyncUpdateTaskTypeSoloScreenshot;
+                [tasks addObject:task2];
+            }
         }
     } else {
         LookinStaticAsyncUpdateTask *task = [self taskFromItem:item];
-        task.taskType = LookinStaticAsyncUpdateTaskTypeNoScreenshot;
-        [tasks addObject:task];
+        if (task) {
+            task.taskType = LookinStaticAsyncUpdateTaskTypeNoScreenshot;
+            [tasks addObject:task];
+        }
     }
     [tasks firstObject].needBasisVisualInfo = YES;
     return tasks;
 }
 
 + (LookinStaticAsyncUpdateTask *)taskFromItem:(LookinDisplayItem *)item {
+    BOOL prefersViewOID = [LKHelper appInfoLooksLikeMacTarget:[LKAppsManager sharedInstance].inspectingApp.appInfo];
+    unsigned long oid = [item bestObjectOidPreferView:prefersViewOID];
+    if (!oid) {
+        return nil;
+    }
     LookinStaticAsyncUpdateTask *task = [LookinStaticAsyncUpdateTask new];
-    task.oid = item.layerObject.oid;
+    task.oid = oid;
     task.frameSize = item.frame.size;
     task.clientReadableVersion = [LKHelper lookinReadableVersion];
     return task;

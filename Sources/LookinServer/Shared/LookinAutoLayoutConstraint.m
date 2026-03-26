@@ -15,7 +15,7 @@
 
 @implementation LookinAutoLayoutConstraint
 
-#if TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE || TARGET_OS_MAC
 
 + (instancetype)instanceFromNSConstraint:(NSLayoutConstraint *)constraint isEffective:(BOOL)isEffective firstItemType:(LookinConstraintItemType)firstItemType secondItemType:(LookinConstraintItemType)secondItemType {
     LookinAutoLayoutConstraint *instance = [LookinAutoLayoutConstraint new];
@@ -39,14 +39,19 @@
 
 - (void)setFirstAttribute:(NSInteger)firstAttribute {
     _firstAttribute = firstAttribute;
+#if TARGET_OS_IPHONE
     [self _assertUnknownAttribute:firstAttribute];
+#endif
 }
 
 - (void)setSecondAttribute:(NSInteger)secondAttribute {
     _secondAttribute = secondAttribute;
+#if TARGET_OS_IPHONE
     [self _assertUnknownAttribute:secondAttribute];
+#endif
 }
 
+#if TARGET_OS_IPHONE
 - (void)_assertUnknownAttribute:(NSInteger)attribute {
     // 以下几个 assert 用来帮助发现那些系统私有的定义，正式发布时应该去掉这几个 assert
     if (attribute > 20 && attribute < 32) {
@@ -56,6 +61,7 @@
         NSAssert(NO, nil);
     }
 }
+#endif
 
 #endif
 

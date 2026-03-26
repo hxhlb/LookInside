@@ -16,6 +16,8 @@
 
 #if TARGET_OS_MAC
 #import "Color+Lookin.h"
+#import "NSObject+LookinServer.h"
+#import "LookinIvarTrace.h"
 
 @implementation LKS_AttrGroupsMaker
 
@@ -51,6 +53,90 @@
     group.identifier = identifier;
     group.attrSections = validSections;
     return group;
+}
+
++ (NSArray<NSString *> *)_classChainForObject:(id)object endingClass:(Class)endingClass {
+    NSMutableArray<NSString *> *completedList = [NSMutableArray arrayWithArray:[object lks_classChainList] ?: @[]];
+    NSString *endingClassName = NSStringFromClass(endingClass);
+    NSUInteger endingIdx = [completedList indexOfObject:endingClassName];
+    if (endingIdx != NSNotFound) {
+        return [completedList subarrayWithRange:NSMakeRange(0, endingIdx + 1)];
+    }
+    return completedList.copy;
+}
+
++ (NSArray<NSString *> *)_relationForObject:(id)object {
+    NSMutableArray<NSString *> *array = [NSMutableArray array];
+    if ([object lks_specialTrace].length) {
+        [array addObject:[object lks_specialTrace]];
+    }
+    for (LookinIvarTrace *trace in [object lks_ivarTraces] ?: @[]) {
+        [array addObject:[NSString stringWithFormat:@"(%@ *) -> %@", trace.hostClassName, trace.ivarName]];
+    }
+    return array.count ? array.copy : nil;
+}
+
++ (NSNumber *)_boolNumber:(BOOL)value {
+    return @(value);
+}
+
++ (NSValue *)_rectValue:(CGRect)rect {
+    return [NSValue valueWithRect:rect];
+}
+
++ (NSValue *)_pointValue:(CGPoint)point {
+    return [NSValue valueWithPoint:point];
+}
+
++ (NSValue *)_sizeValue:(CGSize)size {
+    return [NSValue valueWithSize:size];
+}
+
++ (NSValue *)_insetsValue:(NSEdgeInsets)insets {
+    return [NSValue valueWithEdgeInsets:insets];
+}
+
++ (NSArray<NSArray<NSString *> *> *)_classValueForObject:(id)object endingClass:(Class)endingClass {
+    return @[[self _classChainForObject:object endingClass:endingClass]];
+}
+
++ (NSColor *)_viewBackgroundColor:(NSView *)view {
+    if (view.layer) {
+        return view.layer.lks_backgroundColor;
+    }
+    return nil;
+}
+
++ (NSArray<LookinAttribute *> *)_fontAttrsForObject:(id)object nameIdentifier:(LookinAttrIdentifier)nameID sizeIdentifier:(LookinAttrIdentifier)sizeID {
+    NSFont *font = nil;
+    if ([object isKindOfClass:[NSTextField class]]) {
+        font = ((NSTextField *)object).font;
+    } else if ([object isKindOfClass:[NSTextView class]]) {
+        font = ((NSTextView *)object).font;
+    }
+    if (!font) {
+        return @[];
+    }
+    return @[
+        [self _attributeWithID:nameID type:LookinAttrTypeNSString value:font.fontName ?: @""],
+        [self _attributeWithID:sizeID type:LookinAttrTypeDouble value:@(font.pointSize)]
+    ];
+}
+
++ (LookinAttributesGroup *)_baseClassGroupForObject:(id)object endingClass:(Class)endingClass {
+    return [self _groupWithID:LookinAttrGroup_Class sections:@[
+        [self _sectionWithID:LookinAttrSec_Class_Class attrs:@[
+            [self _attributeWithID:LookinAttr_Class_Class_Class type:LookinAttrTypeCustomObj value:[self _classValueForObject:object endingClass:endingClass]]
+        ]]
+    ]];
+}
+
++ (LookinAttributesGroup *)_baseRelationGroupForObject:(id)object {
+    return [self _groupWithID:LookinAttrGroup_Relation sections:@[
+        [self _sectionWithID:LookinAttrSec_Relation_Relation attrs:@[
+            [self _attributeWithID:LookinAttr_Relation_Relation_Relation type:LookinAttrTypeCustomObj value:[self _relationForObject:object]]
+        ]]
+    ]];
 }
 
 + (NSArray<LookinAttributesGroup *> *)attrGroupsForLayer:(CALayer *)layer {
@@ -124,6 +210,337 @@
             [self _attributeWithID:LookinAttr_ViewLayer_Shadow_Radius type:LookinAttrTypeDouble value:@(layer.shadowRadius)],
             [self _attributeWithID:LookinAttr_ViewLayer_Shadow_OffsetW type:LookinAttrTypeDouble value:@(layer.shadowOffset.width)],
             [self _attributeWithID:LookinAttr_ViewLayer_Shadow_OffsetH type:LookinAttrTypeDouble value:@(layer.shadowOffset.height)]
+        ]]
+    ]];
+    if (viewLayerGroup) {
+        [groups addObject:viewLayerGroup];
+    }
+
+    return groups.copy;
+}
+
++ (NSArray<LookinAttributesGroup *> *)attrGroupsForView:(NSView *)view {
+    if (!view) {
+        return @[];
+    }
+
+    NSMutableArray<LookinAttributesGroup *> *groups = [NSMutableArray array];
+
+    LookinAttributesGroup *classGroup = [self _baseClassGroupForObject:view endingClass:NSView.class];
+    if (classGroup) {
+        [groups addObject:classGroup];
+    }
+
+    LookinAttributesGroup *relationGroup = [self _baseRelationGroupForObject:view];
+    if (relationGroup) {
+        [groups addObject:relationGroup];
+    }
+
+    NSEdgeInsets safeAreaInsets = NSEdgeInsetsZero;
+    if (@available(macOS 11.0, *)) {
+        safeAreaInsets = view.safeAreaInsets;
+    }
+    LookinAttributesGroup *layoutGroup = [self _groupWithID:LookinAttrGroup_Layout sections:@[
+        [self _sectionWithID:LookinAttrSec_Layout_Frame attrs:@[
+            [self _attributeWithID:LookinAttr_Layout_Frame_Frame type:LookinAttrTypeCGRect value:[self _rectValue:view.frame]]
+        ]],
+        [self _sectionWithID:LookinAttrSec_Layout_Bounds attrs:@[
+            [self _attributeWithID:LookinAttr_Layout_Bounds_Bounds type:LookinAttrTypeCGRect value:[self _rectValue:view.bounds]]
+        ]],
+        [self _sectionWithID:LookinAttrSec_Layout_SafeArea attrs:@[
+            [self _attributeWithID:LookinAttr_Layout_SafeArea_SafeArea type:LookinAttrTypeUIEdgeInsets value:[self _insetsValue:safeAreaInsets]]
+        ]],
+        [self _sectionWithID:LookinAttrSec_Layout_Position attrs:@[
+            [self _attributeWithID:LookinAttr_Layout_Position_Position type:LookinAttrTypeCGPoint value:[self _pointValue:view.layer.position]]
+        ]],
+        [self _sectionWithID:LookinAttrSec_Layout_AnchorPoint attrs:@[
+            [self _attributeWithID:LookinAttr_Layout_AnchorPoint_AnchorPoint type:LookinAttrTypeCGPoint value:[self _pointValue:view.layer.anchorPoint]]
+        ]],
+    ]];
+    if (layoutGroup) {
+        [groups addObject:layoutGroup];
+    }
+
+    LookinAttributesGroup *autoLayoutGroup = [self _groupWithID:LookinAttrGroup_AutoLayout sections:@[
+        [self _sectionWithID:LookinAttrSec_AutoLayout_Constraints attrs:@[
+            [self _attributeWithID:LookinAttr_AutoLayout_Constraints_Constraints type:LookinAttrTypeCustomObj value:[view lks_constraints]]
+        ]],
+        [self _sectionWithID:LookinAttrSec_AutoLayout_IntrinsicSize attrs:@[
+            [self _attributeWithID:LookinAttr_AutoLayout_IntrinsicSize_Size type:LookinAttrTypeCGSize value:[self _sizeValue:view.intrinsicContentSize]]
+        ]],
+        [self _sectionWithID:LookinAttrSec_AutoLayout_Hugging attrs:@[
+            [self _attributeWithID:LookinAttr_AutoLayout_Hugging_Hor type:LookinAttrTypeFloat value:@(view.lks_horizontalContentHuggingPriority)],
+            [self _attributeWithID:LookinAttr_AutoLayout_Hugging_Ver type:LookinAttrTypeFloat value:@(view.lks_verticalContentHuggingPriority)]
+        ]],
+        [self _sectionWithID:LookinAttrSec_AutoLayout_Resistance attrs:@[
+            [self _attributeWithID:LookinAttr_AutoLayout_Resistance_Hor type:LookinAttrTypeFloat value:@(view.lks_horizontalContentCompressionResistancePriority)],
+            [self _attributeWithID:LookinAttr_AutoLayout_Resistance_Ver type:LookinAttrTypeFloat value:@(view.lks_verticalContentCompressionResistancePriority)]
+        ]]
+    ]];
+    if (autoLayoutGroup) {
+        [groups addObject:autoLayoutGroup];
+    }
+
+    NSColor *backgroundColor = [self _viewBackgroundColor:view];
+    NSColor *borderColor = view.layer.lks_borderColor;
+    NSColor *shadowColor = view.layer.lks_shadowColor;
+    BOOL enabled = ![view isKindOfClass:[NSControl class]] || ((NSControl *)view).enabled;
+    LookinAttributesGroup *viewLayerGroup = [self _groupWithID:LookinAttrGroup_ViewLayer sections:@[
+        [self _sectionWithID:LookinAttrSec_ViewLayer_Visibility attrs:@[
+            [self _attributeWithID:LookinAttr_ViewLayer_Visibility_Hidden type:LookinAttrTypeBOOL value:@(view.hidden)],
+            [self _attributeWithID:LookinAttr_ViewLayer_Visibility_Opacity type:LookinAttrTypeFloat value:@(view.layer ? view.layer.opacity : 1)]
+        ]],
+        [self _sectionWithID:LookinAttrSec_ViewLayer_InterationAndMasks attrs:@[
+            [self _attributeWithID:LookinAttr_ViewLayer_InterationAndMasks_Interaction type:LookinAttrTypeBOOL value:[self _boolNumber:enabled]],
+            [self _attributeWithID:LookinAttr_ViewLayer_InterationAndMasks_MasksToBounds type:LookinAttrTypeBOOL value:@(view.layer ? view.layer.masksToBounds : NO)]
+        ]],
+        [self _sectionWithID:LookinAttrSec_ViewLayer_Corner attrs:@[
+            [self _attributeWithID:LookinAttr_ViewLayer_Corner_Radius type:LookinAttrTypeDouble value:@(view.layer ? view.layer.cornerRadius : 0)]
+        ]],
+        [self _sectionWithID:LookinAttrSec_ViewLayer_BgColor attrs:@[
+            [self _attributeWithID:LookinAttr_ViewLayer_BgColor_BgColor type:LookinAttrTypeUIColor value:backgroundColor ? backgroundColor.lookin_rgbaComponents : nil]
+        ]],
+        [self _sectionWithID:LookinAttrSec_ViewLayer_Border attrs:@[
+            [self _attributeWithID:LookinAttr_ViewLayer_Border_Color type:LookinAttrTypeUIColor value:borderColor ? borderColor.lookin_rgbaComponents : nil],
+            [self _attributeWithID:LookinAttr_ViewLayer_Border_Width type:LookinAttrTypeDouble value:@(view.layer ? view.layer.borderWidth : 0)]
+        ]],
+        [self _sectionWithID:LookinAttrSec_ViewLayer_Shadow attrs:@[
+            [self _attributeWithID:LookinAttr_ViewLayer_Shadow_Color type:LookinAttrTypeUIColor value:shadowColor ? shadowColor.lookin_rgbaComponents : nil],
+            [self _attributeWithID:LookinAttr_ViewLayer_Shadow_Opacity type:LookinAttrTypeFloat value:@(view.layer ? view.layer.shadowOpacity : 0)],
+            [self _attributeWithID:LookinAttr_ViewLayer_Shadow_Radius type:LookinAttrTypeDouble value:@(view.layer ? view.layer.shadowRadius : 0)],
+            [self _attributeWithID:LookinAttr_ViewLayer_Shadow_OffsetW type:LookinAttrTypeDouble value:@(view.layer ? view.layer.shadowOffset.width : 0)],
+            [self _attributeWithID:LookinAttr_ViewLayer_Shadow_OffsetH type:LookinAttrTypeDouble value:@(view.layer ? view.layer.shadowOffset.height : 0)]
+        ]],
+    ]];
+    if (viewLayerGroup) {
+        [groups addObject:viewLayerGroup];
+    }
+
+    if ([view isKindOfClass:[NSStackView class]]) {
+        NSStackView *stackView = (NSStackView *)view;
+        LookinAttributesGroup *stackGroup = [self _groupWithID:LookinAttrGroup_UIStackView sections:@[
+            [self _sectionWithID:LookinAttrSec_UIStackView_Axis attrs:@[
+                [self _attributeWithID:LookinAttr_UIStackView_Axis_Axis type:LookinAttrTypeEnumInt value:@(stackView.orientation)]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UIStackView_Distribution attrs:@[
+                [self _attributeWithID:LookinAttr_UIStackView_Distribution_Distribution type:LookinAttrTypeEnumInt value:@(stackView.distribution)]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UIStackView_Alignment attrs:@[
+                [self _attributeWithID:LookinAttr_UIStackView_Alignment_Alignment type:LookinAttrTypeEnumInt value:@(stackView.alignment)]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UIStackView_Spacing attrs:@[
+                [self _attributeWithID:LookinAttr_UIStackView_Spacing_Spacing type:LookinAttrTypeDouble value:@(stackView.spacing)]
+            ]]
+        ]];
+        if (stackGroup) {
+            [groups addObject:stackGroup];
+        }
+    }
+
+    if ([view isKindOfClass:[NSVisualEffectView class]]) {
+        NSVisualEffectView *effectView = (NSVisualEffectView *)view;
+        LookinAttributesGroup *effectGroup = [self _groupWithID:LookinAttrGroup_UIVisualEffectView sections:@[
+            [self _sectionWithID:LookinAttrSec_UIVisualEffectView_Style attrs:@[
+                [self _attributeWithID:LookinAttr_UIVisualEffectView_Style_Style type:LookinAttrTypeEnumInt value:@(effectView.material)]
+            ]]
+        ]];
+        if (effectGroup) {
+            [groups addObject:effectGroup];
+        }
+    }
+
+    if ([view isKindOfClass:[NSImageView class]]) {
+        NSImageView *imageView = (NSImageView *)view;
+        LookinAttributesGroup *imageGroup = [self _groupWithID:LookinAttrGroup_UIImageView sections:@[
+            [self _sectionWithID:LookinAttrSec_UIImageView_Name attrs:@[
+                [self _attributeWithID:LookinAttr_UIImageView_Name_Name type:LookinAttrTypeNSString value:[imageView lks_imageSourceName]]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UIImageView_Open attrs:@[
+                [self _attributeWithID:LookinAttr_UIImageView_Open_Open type:LookinAttrTypeCustomObj value:[imageView lks_imageViewOidIfHasImage]]
+            ]]
+        ]];
+        if (imageGroup) {
+            [groups addObject:imageGroup];
+        }
+    }
+
+    if ([view isKindOfClass:[NSTextField class]]) {
+        NSTextField *textField = (NSTextField *)view;
+        BOOL editable = textField.isEditable;
+        LookinAttributesGroup *textGroup = [self _groupWithID:(editable ? LookinAttrGroup_UITextField : LookinAttrGroup_UILabel) sections:(editable ? @[
+            [self _sectionWithID:LookinAttrSec_UITextField_Text attrs:@[
+                [self _attributeWithID:LookinAttr_UITextField_Text_Text type:LookinAttrTypeNSString value:textField.stringValue ?: @""]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UITextField_Placeholder attrs:@[
+                [self _attributeWithID:LookinAttr_UITextField_Placeholder_Placeholder type:LookinAttrTypeNSString value:textField.placeholderString]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UITextField_Font attrs:[self _fontAttrsForObject:textField nameIdentifier:LookinAttr_UITextField_Font_Name sizeIdentifier:LookinAttr_UITextField_Font_Size]],
+            [self _sectionWithID:LookinAttrSec_UITextField_TextColor attrs:@[
+                [self _attributeWithID:LookinAttr_UITextField_TextColor_Color type:LookinAttrTypeUIColor value:textField.textColor ? textField.textColor.lookin_rgbaComponents : nil]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UITextField_Alignment attrs:@[
+                [self _attributeWithID:LookinAttr_UITextField_Alignment_Alignment type:LookinAttrTypeEnumInt value:@(textField.alignment)]
+            ]]
+        ] : @[
+            [self _sectionWithID:LookinAttrSec_UILabel_Text attrs:@[
+                [self _attributeWithID:LookinAttr_UILabel_Text_Text type:LookinAttrTypeNSString value:textField.stringValue ?: @""]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UILabel_Font attrs:[self _fontAttrsForObject:textField nameIdentifier:LookinAttr_UILabel_Font_Name sizeIdentifier:LookinAttr_UILabel_Font_Size]],
+            [self _sectionWithID:LookinAttrSec_UILabel_TextColor attrs:@[
+                [self _attributeWithID:LookinAttr_UILabel_TextColor_Color type:LookinAttrTypeUIColor value:textField.textColor ? textField.textColor.lookin_rgbaComponents : nil]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UILabel_Alignment attrs:@[
+                [self _attributeWithID:LookinAttr_UILabel_Alignment_Alignment type:LookinAttrTypeEnumInt value:@(textField.alignment)]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UILabel_BreakMode attrs:@[
+                [self _attributeWithID:LookinAttr_UILabel_BreakMode_Mode type:LookinAttrTypeEnumInt value:@([textField.cell respondsToSelector:@selector(lineBreakMode)] ? ((NSTextFieldCell *)textField.cell).lineBreakMode : NSLineBreakByTruncatingTail)]
+            ]]
+        ])];
+        if (textGroup) {
+            [groups addObject:textGroup];
+        }
+    }
+
+    if ([view isKindOfClass:[NSTextView class]]) {
+        NSTextView *textView = (NSTextView *)view;
+        LookinAttributesGroup *textViewGroup = [self _groupWithID:LookinAttrGroup_UITextView sections:@[
+            [self _sectionWithID:LookinAttrSec_UITextView_Basic attrs:@[
+                [self _attributeWithID:LookinAttr_UITextView_Basic_Editable type:LookinAttrTypeBOOL value:@(textView.editable)],
+                [self _attributeWithID:LookinAttr_UITextView_Basic_Selectable type:LookinAttrTypeBOOL value:@(textView.selectable)]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UITextView_Text attrs:@[
+                [self _attributeWithID:LookinAttr_UITextView_Text_Text type:LookinAttrTypeNSString value:textView.string ?: @""]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UITextView_Font attrs:[self _fontAttrsForObject:textView nameIdentifier:LookinAttr_UITextView_Font_Name sizeIdentifier:LookinAttr_UITextView_Font_Size]],
+            [self _sectionWithID:LookinAttrSec_UITextView_TextColor attrs:@[
+                [self _attributeWithID:LookinAttr_UITextView_TextColor_Color type:LookinAttrTypeUIColor value:textView.textColor ? textView.textColor.lookin_rgbaComponents : nil]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UITextView_Alignment attrs:@[
+                [self _attributeWithID:LookinAttr_UITextView_Alignment_Alignment type:LookinAttrTypeEnumInt value:@(textView.alignment)]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UITextView_ContainerInset attrs:@[
+                [self _attributeWithID:LookinAttr_UITextView_ContainerInset_Inset type:LookinAttrTypeUIEdgeInsets value:[self _insetsValue:NSEdgeInsetsMake(textView.textContainerInset.height, textView.textContainerInset.width, textView.textContainerInset.height, textView.textContainerInset.width)]]
+            ]]
+        ]];
+        if (textViewGroup) {
+            [groups addObject:textViewGroup];
+        }
+    }
+
+    if ([view isKindOfClass:[NSControl class]]) {
+        NSControl *control = (NSControl *)view;
+        LookinAttributesGroup *controlGroup = [self _groupWithID:LookinAttrGroup_UIControl sections:@[
+            [self _sectionWithID:LookinAttrSec_UIControl_EnabledSelected attrs:@[
+                [self _attributeWithID:LookinAttr_UIControl_EnabledSelected_Enabled type:LookinAttrTypeBOOL value:@(control.enabled)],
+                [self _attributeWithID:LookinAttr_UIControl_EnabledSelected_Selected type:LookinAttrTypeBOOL value:@([control isKindOfClass:[NSButton class]] ? (((NSButton *)control).state == NSControlStateValueOn) : NO)]
+            ]]
+        ]];
+        if (controlGroup) {
+            [groups addObject:controlGroup];
+        }
+    }
+
+    if ([view isKindOfClass:[NSButton class]]) {
+        NSButton *button = (NSButton *)view;
+        LookinAttributesGroup *buttonGroup = [self _groupWithID:LookinAttrGroup_UIButton sections:@[
+            [self _sectionWithID:LookinAttrSec_UIButton_ContentInsets attrs:@[
+                [self _attributeWithID:LookinAttr_UIButton_ContentInsets_Insets type:LookinAttrTypeUIEdgeInsets value:[self _insetsValue:NSEdgeInsetsZero]]
+            ]]
+        ]];
+        if (buttonGroup) {
+            [groups addObject:buttonGroup];
+        }
+    }
+
+    if ([view isKindOfClass:[NSScrollView class]]) {
+        NSScrollView *scrollView = (NSScrollView *)view;
+        NSView *documentView = scrollView.documentView;
+        NSEdgeInsets contentInsets = scrollView.contentInsets;
+        NSEdgeInsets indicatorInsets = NSEdgeInsetsZero;
+        if ([scrollView respondsToSelector:@selector(scrollerInsets)]) {
+            indicatorInsets = scrollView.scrollerInsets;
+        }
+        BOOL allowHorBounce = scrollView.horizontalScrollElasticity != NSScrollElasticityNone;
+        BOOL allowVerBounce = scrollView.verticalScrollElasticity != NSScrollElasticityNone;
+        LookinAttributesGroup *scrollGroup = [self _groupWithID:LookinAttrGroup_UIScrollView sections:@[
+            [self _sectionWithID:LookinAttrSec_UIScrollView_ContentInset attrs:@[
+                [self _attributeWithID:LookinAttr_UIScrollView_ContentInset_Inset type:LookinAttrTypeUIEdgeInsets value:[self _insetsValue:contentInsets]]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UIScrollView_AdjustedInset attrs:@[
+                [self _attributeWithID:LookinAttr_UIScrollView_AdjustedInset_Inset type:LookinAttrTypeUIEdgeInsets value:[self _insetsValue:contentInsets]]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UIScrollView_QMUIInitialInset attrs:@[
+                [self _attributeWithID:LookinAttr_UIScrollView_QMUIInitialInset_Inset type:LookinAttrTypeUIEdgeInsets value:[self _insetsValue:contentInsets]]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UIScrollView_IndicatorInset attrs:@[
+                [self _attributeWithID:LookinAttr_UIScrollView_IndicatorInset_Inset type:LookinAttrTypeUIEdgeInsets value:[self _insetsValue:indicatorInsets]]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UIScrollView_Offset attrs:@[
+                [self _attributeWithID:LookinAttr_UIScrollView_Offset_Offset type:LookinAttrTypeCGPoint value:[self _pointValue:scrollView.contentView.bounds.origin]]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UIScrollView_ContentSize attrs:@[
+                [self _attributeWithID:LookinAttr_UIScrollView_ContentSize_Size type:LookinAttrTypeCGSize value:[self _sizeValue:documentView ? documentView.frame.size : CGSizeZero]]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UIScrollView_ShowsIndicator attrs:@[
+                [self _attributeWithID:LookinAttr_UIScrollView_ShowsIndicator_Hor type:LookinAttrTypeBOOL value:@(scrollView.hasHorizontalScroller)],
+                [self _attributeWithID:LookinAttr_UIScrollView_ShowsIndicator_Ver type:LookinAttrTypeBOOL value:@(scrollView.hasVerticalScroller)]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UIScrollView_Bounce attrs:@[
+                [self _attributeWithID:LookinAttr_UIScrollView_Bounce_Hor type:LookinAttrTypeBOOL value:@(allowHorBounce)],
+                [self _attributeWithID:LookinAttr_UIScrollView_Bounce_Ver type:LookinAttrTypeBOOL value:@(allowVerBounce)]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UIScrollView_ScrollPaging attrs:@[
+                [self _attributeWithID:LookinAttr_UIScrollView_ScrollPaging_ScrollEnabled type:LookinAttrTypeBOOL value:@(YES)],
+                [self _attributeWithID:LookinAttr_UIScrollView_ScrollPaging_PagingEnabled type:LookinAttrTypeBOOL value:@(NO)]
+            ]],
+            [self _sectionWithID:LookinAttrSec_UIScrollView_Zoom attrs:@[
+                [self _attributeWithID:LookinAttr_UIScrollView_Zoom_Bounce type:LookinAttrTypeBOOL value:@(scrollView.allowsMagnification)],
+                [self _attributeWithID:LookinAttr_UIScrollView_Zoom_Scale type:LookinAttrTypeDouble value:@(scrollView.magnification)],
+                [self _attributeWithID:LookinAttr_UIScrollView_Zoom_MinScale type:LookinAttrTypeDouble value:@(scrollView.minMagnification)],
+                [self _attributeWithID:LookinAttr_UIScrollView_Zoom_MaxScale type:LookinAttrTypeDouble value:@(scrollView.maxMagnification)]
+            ]]
+        ]];
+        if (scrollGroup) {
+            [groups addObject:scrollGroup];
+        }
+    }
+
+    return groups.copy;
+}
+
++ (NSArray<LookinAttributesGroup *> *)attrGroupsForWindow:(NSWindow *)window {
+    if (!window) {
+        return @[];
+    }
+
+    NSMutableArray<LookinAttributesGroup *> *groups = [NSMutableArray array];
+
+    LookinAttributesGroup *classGroup = [self _baseClassGroupForObject:window endingClass:NSWindow.class];
+    if (classGroup) {
+        [groups addObject:classGroup];
+    }
+
+    LookinAttributesGroup *relationGroup = [self _baseRelationGroupForObject:window];
+    if (relationGroup) {
+        [groups addObject:relationGroup];
+    }
+
+    LookinAttributesGroup *layoutGroup = [self _groupWithID:LookinAttrGroup_Layout sections:@[
+        [self _sectionWithID:LookinAttrSec_Layout_Frame attrs:@[
+            [self _attributeWithID:LookinAttr_Layout_Frame_Frame type:LookinAttrTypeCGRect value:[self _rectValue:window.frame]]
+        ]],
+        [self _sectionWithID:LookinAttrSec_Layout_Bounds attrs:@[
+            [self _attributeWithID:LookinAttr_Layout_Bounds_Bounds type:LookinAttrTypeCGRect value:[self _rectValue:window.contentView.bounds]]
+        ]]
+    ]];
+    if (layoutGroup) {
+        [groups addObject:layoutGroup];
+    }
+
+    LookinAttributesGroup *viewLayerGroup = [self _groupWithID:LookinAttrGroup_ViewLayer sections:@[
+        [self _sectionWithID:LookinAttrSec_ViewLayer_Visibility attrs:@[
+            [self _attributeWithID:LookinAttr_ViewLayer_Visibility_Hidden type:LookinAttrTypeBOOL value:@(!window.visible)],
+            [self _attributeWithID:LookinAttr_ViewLayer_Visibility_Opacity type:LookinAttrTypeFloat value:@(window.alphaValue)]
         ]]
     ]];
     if (viewLayerGroup) {

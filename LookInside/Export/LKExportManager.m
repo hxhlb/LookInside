@@ -15,6 +15,7 @@
 #import "LKHelper.h"
 #import "LKNavigationManager.h"
 #import "LookinDisplayItem.h"
+#import "LookinDisplayItem+LookinClient.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 @implementation LKExportManager
@@ -39,12 +40,17 @@
     
     NSMutableDictionary<NSString *, NSData *> *soloScreenshots = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSString *, NSData *> *groupScreenshots = [NSMutableDictionary dictionary];
+    BOOL prefersViewOID = [LKHelper appInfoLooksLikeMacTarget:info.appInfo];
     
     NSArray<LookinDisplayItem *> *allItems = [LookinDisplayItem flatItemsFromHierarchicalItems:info.displayItems];
     [allItems enumerateObjectsUsingBlock:^(LookinDisplayItem * _Nonnull displayItem, NSUInteger idx, BOOL * _Nonnull stop) {
+        unsigned long oid = [displayItem bestObjectOidPreferView:prefersViewOID];
+        if (!oid) {
+            return;
+        }
         displayItem.screenshotEncodeType = LookinDisplayItemImageEncodeTypeNone;
-        soloScreenshots[@(displayItem.layerObject.oid)] = [self _compressedDataFromImage:displayItem.soloScreenshot compression:compression];
-        groupScreenshots[@(displayItem.layerObject.oid)] = [self _compressedDataFromImage:displayItem.groupScreenshot compression:compression];
+        soloScreenshots[@(oid)] = [self _compressedDataFromImage:displayItem.soloScreenshot compression:compression];
+        groupScreenshots[@(oid)] = [self _compressedDataFromImage:displayItem.groupScreenshot compression:compression];
     }];
     file.soloScreenshots = soloScreenshots.copy;
     file.groupScreenshots = groupScreenshots.copy;

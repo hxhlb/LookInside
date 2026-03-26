@@ -177,9 +177,12 @@
     BOOL isSelected = (self.dataSource.selectedItem == self.displayItem);
     BOOL isHovered = (self.dataSource.hoveredItem == self.displayItem);
     
-    LookinImage *appropriateScreenshot = self.displayItem.appropriateScreenshot;
-    NSAssert(MAX(appropriateScreenshot.representations.firstObject.pixelsWide, appropriateScreenshot.representations.firstObject.pixelsHigh) <= LookinNodeImageMaxLengthInPx , @"image is too large");
-    self.contentPlane.firstMaterial.diffuse.contents = appropriateScreenshot;
+    BOOL suppressedByAncestorGroupFallback = [self.displayItem hasAncestorUsingGroupScreenshotFallbackInPreview];
+    LookinImage *appropriateScreenshot = suppressedByAncestorGroupFallback ? nil : self.displayItem.appropriateScreenshot;
+    if (appropriateScreenshot) {
+        NSAssert(MAX(appropriateScreenshot.representations.firstObject.pixelsWide, appropriateScreenshot.representations.firstObject.pixelsHigh) <= LookinNodeImageMaxLengthInPx , @"image is too large");
+    }
+    self.contentPlane.firstMaterial.diffuse.contents = appropriateScreenshot ?: (self.displayItem.backgroundColor ?: [NSColor clearColor]);
     
     BOOL tooLargeToFetchScreenshot = !appropriateScreenshot && self.displayItem.doNotFetchScreenshotReason == LookinDoNotFetchScreenshotForTooLarge;
     

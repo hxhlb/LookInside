@@ -129,12 +129,16 @@
     
     unsigned long prevSelectedOid = 0;
     NSMutableDictionary *prevExpansionMap = nil;
+    BOOL prefersViewOID = [LKHelper appInfoLooksLikeMacTarget:info.appInfo];
     if (keepState) {
-        prevSelectedOid = self.selectedItem.layerObject.oid;
+        prevSelectedOid = [self.selectedItem bestObjectOidPreferView:prefersViewOID];
         
         prevExpansionMap = [NSMutableDictionary dictionary];
         [self.flatItems enumerateObjectsUsingBlock:^(LookinDisplayItem * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
-            prevExpansionMap[@(obj.layerObject.oid)] = @(obj.isExpanded);
+            unsigned long oid = [obj bestObjectOidPreferView:prefersViewOID];
+            if (oid) {
+                prevExpansionMap[@(oid)] = @(obj.isExpanded);
+            }
         }];
     }
     
@@ -299,7 +303,8 @@
         }
         
         if (referenceDict) {
-            NSNumber *prevState = referenceDict[@(obj.layerObject.oid)];
+            BOOL prefersViewOID = [LKHelper appInfoLooksLikeMacTarget:self.rawHierarchyInfo.appInfo];
+            NSNumber *prevState = referenceDict[@([obj bestObjectOidPreferView:prefersViewOID])];
             if (prevState != nil) {
                 // 旧的对象，直接维持之前的状态
                 obj.isExpanded = [prevState boolValue];

@@ -9,6 +9,76 @@
 #import "LookinDisplayItem+LookinClient.h"
 #import "LookinIvarTrace.h"
 
+enum {
+    LKVisiblePixelSampleWidth = 16,
+    LKVisiblePixelSampleHeight = 16,
+    LKVisiblePixelBytesPerPixel = 4,
+};
+
+static CGFloat LKApproximateVisiblePixelRatio(NSImage *image) {
+    if (!image || image.size.width <= 0 || image.size.height <= 0) {
+        return 0;
+    }
+
+    CGRect proposedRect = CGRectMake(0, 0, image.size.width, image.size.height);
+    CGImageRef cgImage = [image CGImageForProposedRect:&proposedRect context:nil hints:nil];
+    if (!cgImage) {
+        return 0;
+    }
+
+    const size_t bytesPerRow = LKVisiblePixelSampleWidth * LKVisiblePixelBytesPerPixel;
+    uint8_t pixels[LKVisiblePixelSampleWidth * LKVisiblePixelSampleHeight * LKVisiblePixelBytesPerPixel];
+    memset(pixels, 0, sizeof(pixels));
+
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    if (!colorSpace) {
+        return 0;
+    }
+
+    CGContextRef context = CGBitmapContextCreate(pixels,
+                                                 LKVisiblePixelSampleWidth,
+                                                 LKVisiblePixelSampleHeight,
+                                                 8,
+                                                 bytesPerRow,
+                                                 colorSpace,
+                                                 kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(colorSpace);
+    if (!context) {
+        return 0;
+    }
+
+    CGContextDrawImage(context, CGRectMake(0, 0, LKVisiblePixelSampleWidth, LKVisiblePixelSampleHeight), cgImage);
+    CGContextRelease(context);
+
+    NSUInteger visiblePixelCount = 0;
+    const NSUInteger totalPixelCount = LKVisiblePixelSampleWidth * LKVisiblePixelSampleHeight;
+    for (NSUInteger idx = 0; idx < totalPixelCount; idx++) {
+        const uint8_t alpha = pixels[idx * LKVisiblePixelBytesPerPixel + 3];
+        if (alpha > 12) {
+            visiblePixelCount++;
+        }
+    }
+
+    return (CGFloat)visiblePixelCount / (CGFloat)totalPixelCount;
+}
+
+static BOOL LKShouldFallbackToGroupScreenshot(NSImage *soloScreenshot, NSImage *groupScreenshot) {
+    if (!groupScreenshot) {
+        return NO;
+    }
+    if (!soloScreenshot) {
+        return YES;
+    }
+
+    CGFloat soloVisibleRatio = LKApproximateVisiblePixelRatio(soloScreenshot);
+    if (soloVisibleRatio >= 0.02) {
+        return NO;
+    }
+
+    CGFloat groupVisibleRatio = LKApproximateVisiblePixelRatio(groupScreenshot);
+    return groupVisibleRatio > MAX(0.05, soloVisibleRatio * 4.0);
+}
+
 @implementation LookinDisplayItem (LookinClient)
 
 - (BOOL)_lk_usesAbsoluteRootCoordinates {
@@ -18,12 +88,52 @@
     }
 
     LookinObject *rootObject = rootItem.windowObject ?: rootItem.viewObject ?: rootItem.layerObject;
-    NSString *rootClassName = rootObject.classChainList.firstObject ?: @"";
-    return [rootClassName hasPrefix:@"NSWindow"];
+    for (NSString *className in rootObject.classChainList ?: @[]) {
+        if ([className hasPrefix:@"NSWindow"]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+- (LookinDisplayItem *)_lk_rootItem {
+    LookinDisplayItem *rootItem = self;
+    while (rootItem.superItem) {
+        rootItem = rootItem.superItem;
+    }
+    return rootItem;
 }
 
 - (LookinObject *)windowObject {
     return self.viewObject;
+}
+
+- (unsigned long)bestObjectOidPreferView:(BOOL)preferView {
+    if (preferView && self.viewObject.oid) {
+        return self.viewObject.oid;
+    }
+    if (self.layerObject.oid) {
+        return self.layerObject.oid;
+    }
+    if (self.viewObject.oid) {
+        return self.viewObject.oid;
+    }
+    return 0;
+}
+
+- (NSArray<NSNumber *> *)availableObjectOidsPreferView:(BOOL)preferView {
+    NSMutableOrderedSet<NSNumber *> *oids = [NSMutableOrderedSet orderedSet];
+    unsigned long preferredOid = [self bestObjectOidPreferView:preferView];
+    if (preferredOid) {
+        [oids addObject:@(preferredOid)];
+    }
+    if (self.viewObject.oid) {
+        [oids addObject:@(self.viewObject.oid)];
+    }
+    if (self.layerObject.oid) {
+        [oids addObject:@(self.layerObject.oid)];
+    }
+    return oids.array;
 }
 
 - (BOOL)isFlipped {
@@ -76,10 +186,31 @@
 }
 
 - (NSImage *)appropriateScreenshot {
+    if ([self usesGroupScreenshotFallbackInPreview]) {
+        return self.groupScreenshot;
+    }
     if (self.isExpandable && self.isExpanded) {
         return self.soloScreenshot;
     }
     return self.groupScreenshot;
+}
+
+- (BOOL)usesGroupScreenshotFallbackInPreview {
+    if (!(self.isExpandable && self.isExpanded)) {
+        return NO;
+    }
+    return LKShouldFallbackToGroupScreenshot(self.soloScreenshot, self.groupScreenshot);
+}
+
+- (BOOL)hasAncestorUsingGroupScreenshotFallbackInPreview {
+    __block BOOL found = NO;
+    [self enumerateAncestors:^(LookinDisplayItem *item, BOOL *stop) {
+        if ([item usesGroupScreenshotFallbackInPreview]) {
+            found = YES;
+            *stop = YES;
+        }
+    }];
+    return found;
 }
 
 - (BOOL)isUserCustom {
@@ -127,7 +258,13 @@
         return [self.customInfo.frameInWindow rectValue];
     }
     if ([self _lk_usesAbsoluteRootCoordinates]) {
-        return self.frame;
+        LookinDisplayItem *rootItem = [self _lk_rootItem];
+        CGRect rootFrame = rootItem.frame;
+        CGRect frame = self.frame;
+        return CGRectMake(frame.origin.x - rootFrame.origin.x,
+                          frame.origin.y - rootFrame.origin.y,
+                          frame.size.width,
+                          frame.size.height);
     }
     if (!self.superItem) {
         return self.frame;

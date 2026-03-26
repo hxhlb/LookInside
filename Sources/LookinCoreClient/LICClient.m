@@ -1,6 +1,7 @@
 #import "LICClient.h"
 
 #import "LookinCore.h"
+#import "../LookinCore/LookinStaticAsyncUpdateTask.h"
 #import <dispatch/dispatch.h>
 
 static NSString * const LICErrorDomain = @"LookInsideCLI";
@@ -253,7 +254,23 @@ typedef NS_ENUM(NSInteger, LICErrorCode) {
 - (LICChannelSession *)connectToLoopbackPort:(NSInteger)port timeout:(NSTimeInterval)timeout retries:(NSInteger)retries retryDelay:(NSTimeInterval)retryDelay error:(NSError **)error;
 - (nullable LICDiscoveredTarget *)directTargetForTransport:(NSString *)transport port:(NSInteger)port deviceID:(nullable NSString *)deviceID appInfoIdentifier:(NSInteger)appInfoIdentifier error:(NSError **)error;
 - (BOOL)parseTargetID:(NSString *)targetID transport:(NSString * __autoreleasing *)transport port:(NSInteger *)port deviceID:(NSString * __autoreleasing *)deviceID appInfoIdentifier:(NSInteger *)appInfoIdentifier;
+- (nullable LICChannelSession *)openSessionForTarget:(LICDiscoveredTarget *)target error:(NSError **)error;
+- (nullable LookinHierarchyInfo *)fetchHierarchyWithSession:(LICChannelSession *)session error:(NSError **)error;
+- (nullable NSArray<LookinDisplayItemDetail *> *)fetchHierarchyDetailsWithHierarchyInfo:(LookinHierarchyInfo *)hierarchyInfo preferViewOID:(BOOL)preferViewOID session:(LICChannelSession *)session error:(NSError **)error;
 @end
+
+static unsigned long LICBestObjectOIDForItem(LookinDisplayItem *item, BOOL preferViewOID) {
+    if (preferViewOID && item.viewObject.oid) {
+        return item.viewObject.oid;
+    }
+    if (item.layerObject.oid) {
+        return item.layerObject.oid;
+    }
+    if (item.viewObject.oid) {
+        return item.viewObject.oid;
+    }
+    return 0;
+}
 
 @implementation LICClient
 
@@ -300,8 +317,19 @@ typedef NS_ENUM(NSInteger, LICErrorCode) {
 }
 
 - (NSURL *)exportTargetID:(NSString *)targetID outputPath:(NSString *)outputPath error:(NSError **)error {
-    LookinHierarchyInfo *hierarchyInfo = [self fetchHierarchyForTargetID:targetID error:error];
+    LICDiscoveredTarget *target = [self resolveTargetID:targetID error:error];
+    if (!target) {
+        return nil;
+    }
+
+    LICChannelSession *session = [self openSessionForTarget:target error:error];
+    if (!session) {
+        return nil;
+    }
+
+    LookinHierarchyInfo *hierarchyInfo = [self fetchHierarchyWithSession:session error:error];
     if (!hierarchyInfo) {
+        [session close];
         return nil;
     }
 
@@ -311,11 +339,34 @@ typedef NS_ENUM(NSInteger, LICErrorCode) {
 
     NSString *ext = url.pathExtension.lowercaseString;
     if ([ext isEqualToString:@"archive"] || [ext isEqualToString:@"lookin"] || [ext isEqualToString:@"lookinside"]) {
+        BOOL preferViewOID = (hierarchyInfo.appInfo.deviceType == LookinAppInfoDeviceMac);
+        NSArray<LookinDisplayItemDetail *> *details = [self fetchHierarchyDetailsWithHierarchyInfo:hierarchyInfo preferViewOID:preferViewOID session:session error:error];
+        [session close];
+        if (!details) {
+            return nil;
+        }
+
+        NSMutableDictionary<NSNumber *, NSData *> *soloScreenshots = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSNumber *, NSData *> *groupScreenshots = [NSMutableDictionary dictionary];
+        for (LookinDisplayItemDetail *detail in details) {
+            if (detail.failureCode != 0 || detail.displayItemOid == 0) {
+                continue;
+            }
+            NSData *soloData = [detail.soloScreenshot TIFFRepresentation];
+            if (soloData) {
+                soloScreenshots[@(detail.displayItemOid)] = soloData;
+            }
+            NSData *groupData = [detail.groupScreenshot TIFFRepresentation];
+            if (groupData) {
+                groupScreenshots[@(detail.displayItemOid)] = groupData;
+            }
+        }
+
         LookinHierarchyFile *archive = [LookinHierarchyFile new];
         archive.serverVersion = hierarchyInfo.serverVersion;
         archive.hierarchyInfo = hierarchyInfo;
-        archive.soloScreenshots = @{};
-        archive.groupScreenshots = @{};
+        archive.soloScreenshots = soloScreenshots.copy;
+        archive.groupScreenshots = groupScreenshots.copy;
         NSData *data = [NSKeyedArchiver archivedDataWithRootObject:archive requiringSecureCoding:YES error:error];
         if (!data) {
             return nil;
@@ -325,6 +376,8 @@ typedef NS_ENUM(NSInteger, LICErrorCode) {
         }
         return url;
     }
+
+    [session close];
 
     NSDictionary *payload = [self hierarchyJSONObject:hierarchyInfo];
     NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:error];
@@ -587,6 +640,17 @@ typedef NS_ENUM(NSInteger, LICErrorCode) {
         return nil;
     }
 
+    LICChannelSession *session = [self openSessionForTarget:target error:error];
+    if (!session) {
+        return nil;
+    }
+
+    LookinHierarchyInfo *hierarchyInfo = [self fetchHierarchyWithSession:session error:error];
+    [session close];
+    return hierarchyInfo;
+}
+
+- (LICChannelSession *)openSessionForTarget:(LICDiscoveredTarget *)target error:(NSError **)error {
     __block LICChannelSession *session = nil;
     __block NSError *connectError = nil;
     if ([target.transport isEqualToString:@"usb"]) {
@@ -602,16 +666,15 @@ typedef NS_ENUM(NSInteger, LICErrorCode) {
     } else {
         session = [self connectToLoopbackPort:target.port timeout:0.8 retries:3 retryDelay:0.1 error:&connectError];
     }
-    if (!session) {
-        if (error) {
-            *error = connectError;
-        }
-        return nil;
+    if (!session && error) {
+        *error = connectError;
     }
+    return session;
+}
 
+- (LookinHierarchyInfo *)fetchHierarchyWithSession:(LICChannelSession *)session error:(NSError **)error {
     NSDictionary *params = @{@"clientVersion": LOOKIN_SERVER_READABLE_VERSION};
     LookinConnectionResponseAttachment *response = [session validatedRequestType:LookinRequestTypeHierarchy data:params pingTimeout:2 requestTimeout:5 error:error];
-    [session close];
     if (!response) {
         return nil;
     }
@@ -622,6 +685,48 @@ typedef NS_ENUM(NSInteger, LICErrorCode) {
         return nil;
     }
     return (LookinHierarchyInfo *)response.data;
+}
+
+- (NSArray<LookinDisplayItemDetail *> *)fetchHierarchyDetailsWithHierarchyInfo:(LookinHierarchyInfo *)hierarchyInfo preferViewOID:(BOOL)preferViewOID session:(LICChannelSession *)session error:(NSError **)error {
+    NSArray<LookinDisplayItem *> *flatItems = [LookinDisplayItem flatItemsFromHierarchicalItems:hierarchyInfo.displayItems ?: @[]];
+    NSMutableArray<LookinStaticAsyncUpdateTask *> *tasks = [NSMutableArray array];
+    for (LookinDisplayItem *item in flatItems) {
+        unsigned long oid = LICBestObjectOIDForItem(item, preferViewOID);
+        if (oid == 0) {
+            continue;
+        }
+
+        LookinStaticAsyncUpdateTask *groupTask = [LookinStaticAsyncUpdateTask new];
+        groupTask.oid = oid;
+        groupTask.taskType = LookinStaticAsyncUpdateTaskTypeGroupScreenshot;
+        groupTask.attrRequest = LookinDetailUpdateTaskAttrRequest_NotNeed;
+        groupTask.clientReadableVersion = LOOKIN_SERVER_READABLE_VERSION;
+        [tasks addObject:groupTask];
+
+        if (item.isExpandable) {
+            LookinStaticAsyncUpdateTask *soloTask = [LookinStaticAsyncUpdateTask new];
+            soloTask.oid = oid;
+            soloTask.taskType = LookinStaticAsyncUpdateTaskTypeSoloScreenshot;
+            soloTask.attrRequest = LookinDetailUpdateTaskAttrRequest_NotNeed;
+            soloTask.clientReadableVersion = LOOKIN_SERVER_READABLE_VERSION;
+            [tasks addObject:soloTask];
+        }
+    }
+
+    LookinStaticAsyncUpdateTasksPackage *package = [LookinStaticAsyncUpdateTasksPackage new];
+    package.tasks = tasks.copy;
+
+    LookinConnectionResponseAttachment *response = [session validatedRequestType:LookinRequestTypeHierarchyDetails data:@[package] pingTimeout:2 requestTimeout:30 error:error];
+    if (!response) {
+        return nil;
+    }
+    if (![response.data isKindOfClass:[NSArray class]]) {
+        if (error) {
+            *error = [NSError errorWithDomain:LICErrorDomain code:LICErrorCodeInvalidResponse userInfo:@{NSLocalizedDescriptionKey:@"Hierarchy details payload was not an array."}];
+        }
+        return nil;
+    }
+    return (NSArray<LookinDisplayItemDetail *> *)response.data;
 }
 
 - (nullable LICDiscoveredTarget *)directTargetForTransport:(NSString *)transport port:(NSInteger)port deviceID:(nullable NSString *)deviceID appInfoIdentifier:(NSInteger)appInfoIdentifier error:(NSError **)error {

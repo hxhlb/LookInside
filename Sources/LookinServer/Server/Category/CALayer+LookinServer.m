@@ -14,6 +14,41 @@
 
 @implementation CALayer (LookinServer)
 
+static NSArray<NSView *> *LKHideVisibleSubviews(NSArray<NSView *> *subviews) {
+    NSMutableArray<NSView *> *hiddenSubviews = [NSMutableArray array];
+    for (NSView *subview in subviews.copy) {
+        if (!subview.isHidden) {
+            subview.hidden = YES;
+            [hiddenSubviews addObject:subview];
+        }
+    }
+    return hiddenSubviews.copy;
+}
+
+static NSArray<CALayer *> *LKHideVisibleNonHostSublayers(NSArray<CALayer *> *sublayers) {
+    NSMutableArray<CALayer *> *hiddenSublayers = [NSMutableArray array];
+    for (CALayer *sublayer in sublayers.copy) {
+        if (sublayer.hidden || sublayer.lks_hostView) {
+            continue;
+        }
+        sublayer.hidden = YES;
+        [hiddenSublayers addObject:sublayer];
+    }
+    return hiddenSublayers.copy;
+}
+
+static void LKRestoreHiddenViews(NSArray<NSView *> *subviews) {
+    for (NSView *subview in subviews) {
+        subview.hidden = NO;
+    }
+}
+
+static void LKRestoreHiddenLayers(NSArray<CALayer *> *sublayers) {
+    for (CALayer *sublayer in sublayers) {
+        sublayer.hidden = NO;
+    }
+}
+
 + (NSArray<NSString *> *)lks_getClassListOfObject:(id)object endingClass:(NSString *)endingClass {
     NSArray<NSString *> *completedList = [object lks_classChainList];
     NSUInteger endingIdx = [completedList indexOfObject:endingClass];
@@ -41,11 +76,26 @@
     if (!window) {
         return CGRectZero;
     }
-    if (self.lks_hostView) {
-        return [self.lks_hostView convertRect:self.lks_hostView.bounds toView:nil];
+    NSView *hostView = self.lks_hostView;
+    if (hostView) {
+        NSRect rectInWindow = [hostView convertRect:hostView.bounds toView:nil];
+        return [window convertRectToScreen:rectInWindow];
     }
+
+    CALayer *ancestorLayer = self.superlayer;
+    while (ancestorLayer && !ancestorLayer.lks_hostView) {
+        ancestorLayer = ancestorLayer.superlayer;
+    }
+    if (ancestorLayer.lks_hostView && ancestorLayer.lks_hostView.layer) {
+        NSView *ancestorHostView = ancestorLayer.lks_hostView;
+        CGRect rectInHostView = [ancestorHostView.layer convertRect:self.frame fromLayer:self.superlayer];
+        NSRect rectInWindow = [ancestorHostView convertRect:rectInHostView toView:nil];
+        return [window convertRectToScreen:rectInWindow];
+    }
+
     if (self.superlayer && window.contentView.layer) {
-        return [window.contentView.layer convertRect:self.frame fromLayer:self.superlayer];
+        CGRect rectInContent = [window.contentView.layer convertRect:self.frame fromLayer:self.superlayer];
+        return [window convertRectToScreen:rectInContent];
     }
     return self.frame;
 }
@@ -118,22 +168,24 @@
 }
 
 - (NSImage *)lks_soloScreenshotWithLowQuality:(BOOL)lowQuality {
-    if (!self.sublayers.count) {
+    NSView *hostView = self.lks_hostView;
+    if (!hostView && !self.sublayers.count) {
         return nil;
     }
 
-    NSMutableArray<CALayer *> *visibleSublayers = [NSMutableArray array];
-    for (CALayer *sublayer in self.sublayers.copy) {
-        if (!sublayer.hidden) {
-            sublayer.hidden = YES;
-            [visibleSublayers addObject:sublayer];
-        }
+    NSArray<NSView *> *hiddenSubviews = @[];
+    NSArray<CALayer *> *hiddenSublayers = @[];
+    if (hostView) {
+        hiddenSubviews = LKHideVisibleSubviews(hostView.subviews ?: @[]);
     }
+    hiddenSublayers = LKHideVisibleNonHostSublayers(self.sublayers ?: @[]);
 
-    NSImage *image = [self lks_groupScreenshotWithLowQuality:lowQuality];
-
-    for (CALayer *sublayer in visibleSublayers) {
-        sublayer.hidden = NO;
+    NSImage *image = nil;
+    @try {
+        image = [self lks_groupScreenshotWithLowQuality:lowQuality];
+    } @finally {
+        LKRestoreHiddenViews(hiddenSubviews);
+        LKRestoreHiddenLayers(hiddenSublayers);
     }
     return image;
 }
