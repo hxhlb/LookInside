@@ -27,7 +27,7 @@ LookInside can:
 
 ### Requirements
 
-- macOS
+- macOS 14 or later
 - Xcode and command line tools
 - a debuggable macOS or iOS app running locally, in Simulator, or on a connected device if you want to inspect something live
 
